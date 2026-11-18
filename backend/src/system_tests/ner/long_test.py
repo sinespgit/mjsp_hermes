@@ -1,0 +1,129 @@
+import os
+import json
+import multiprocessing as mp
+from queue import Empty as QueueEmptyError
+from time import time, sleep
+
+import polars as pl
+
+DATASETS_DIR = "../../datasets"
+
+def download_eval_dataset(total_rows=36, estado_especifico = 'Distrito Federal',
+        estado_especifico_perc = 1/3):
+
+    expected_path = f"{DATASETS_DIR}/df_emergencies_eval-n={total_rows}.parquet"
+    expected_csv = f"{DATASETS_DIR}/df_emergencies_eval-n={total_rows}.csv"
+    if os.path.exists(expected_path) and os.path.exists(expected_csv):
+        print(f"NER eval dataset already exists at {expected_path}")
+        return pl.read_parquet(expected_path)
+
+    n_estado = round(total_rows*estado_especifico_perc)
+    n_other_states = total_rows - n_estado
+
+    COLUMNS = [
+        "ID",
+        "roteiro_segmentado",
+        "roteiro",
+        "endereco_completo",
+        "nome_solicitante",
+        "rua",
+        "numero",
+        "complemento",
+        "bairro",
+        "cidade",
+        "estado",
+        "CEP",
+        "ponto_de_referencia",
+        "fatoOcorrendoNesteMomento",
+        "autorDoFatoNoLocal",
+        "autorDoFatoArmado",
+        "feridosComRiscoDeMorte",
+        "riscoDeTumulto",
+        "leiMariaPenha",
+    ]
+
+    # Lazy scan across all Parquet shards on the Hub
+    lf = pl.scan_parquet("hf://datasets/pitagoras-alves/fake-emergencies-br/data/train-*.parquet")
+
+    full_df = lf.select(COLUMNS).unique(subset=["roteiro"], keep="first", maintain_order=True).collect()
+
+    df = full_df.filter(pl.col("estado") == estado_especifico)
+    if len(df) > n_estado:
+        df = df.sample(n=n_estado, seed=1337)
+    else:
+        print(f"Not enough data for {estado_especifico}. Only found {len(df)} rows.")
+        n_other_states = total_rows - len(df)
+        
+
+    df_other_states = (
+        full_df.filter(pl.col("estado") != estado_especifico)
+        .sample(n=n_other_states, seed=1337)
+    )
+
+    print(f"Downloaded {len(df_other_states)} rows.")
+    print(df_other_states.head())
+
+    df_eval = pl.concat([df, df_other_states])
+
+    # Save locally if needed
+    df_eval.write_parquet(expected_path)
+    print(df_eval.schema)
+    #convert roteiro_segmentado to str
+    roteiro_raw_lists = df_eval["roteiro_segmentado"].to_list()
+    roteiro_strs = ["\n\n".join([f"{a}: {b}" for a, b in roteiro]) for roteiro in roteiro_raw_lists]
+    df_eval2 = df_eval.with_columns(pl.Series("roteiro_segmentado", roteiro_strs))
+    print(df_eval2.schema)
+    df_eval2.write_csv(expected_path.replace('.parquet', '.csv'))
+    return df_eval
+
+
+def eval_ner(transcript_queue: mp.Queue, result_queue: mp.Queue, total_rows=36):
+
+    expected_result_path = f"{DATASETS_DIR}/ner_eval_results.json"
+
+    df_eval = download_eval_dataset(total_rows=total_rows)
+
+    existing_rows = 0
+    if os.path.exists(expected_result_path):
+        old_results = json.load(open(expected_result_path, "r"))
+        existing_rows = len(old_results)
+        if existing_rows >= total_rows:
+            return expected_result_path
+
+    test_id = -1
+    results = []
+
+    for row in df_eval.iter_rows(named=True):
+        expected = {k: v for k, v in row.items()}
+        transcript = row["roteiro"]
+        print(transcript)
+
+        transcript_queue.put((str(test_id), -1, transcript))
+        wait_start = time()
+        sleep(1)
+        result_attempts = 3
+        result_timeoff_secs = 3
+        while result_attempts > 0:
+            try:
+                result = result_queue.get(timeout=result_timeoff_secs)
+                inf_time = time() - wait_start
+                result["inf_time"] = inf_time
+                result["expected"] = expected
+                results.append(result)
+                break
+            except QueueEmptyError:
+                result_attempts -= 1
+                result_timeoff_secs *= 2
+                print("NER Timeout after", time() - wait_start, "; attempts left: ", result_attempts)
+
+        test_id -= 1
+    
+        with open(expected_result_path, "w") as f:
+            json.dump(results, f, indent=4, ensure_ascii=False)
+
+    return expected_result_path
+
+    
+    
+
+    

@@ -1,4 +1,5 @@
 import os
+import sys
 from time import time
 from uuid import uuid1
 
@@ -14,30 +15,43 @@ router = APIRouter()
 
 
 # Create endpoint that receives call transcript and return entities extracted from it.
-@router.post("/send_transcript/")
-def store_transcript(id_emergencia: str, transcript: str) -> str:
+@router.post("/store_transcript/")
+def store_transcript(id_emergencia: str, transcript: str, actor: str = 'transcricao') -> str:
     """
     Extract entities from the given transcript.
 
     Args:
         id_emergencia (str): ID of an existing emergency.
         transcript (str): The call transcript from which to extract entities.
+        actor(str): Default = 'transcricao'
 
     Returns:
-        dict: The ID for the stored transcript
+        str: The ID for the stored transcript
     """
 
-    sqlite_conn = sqlite.connect(os.environ["SQLITE_DB_PATH"])
-    cursor = sqlite_conn.cursor()
-    insert_str = f"""
-        INSERT INTO emergency_transcripts (id_emergencia, part, start_time, horario_de_transcricao, transcription_model, actor) 
-            VALUES ({id_emergencia},'{transcript}',{time()}, {time()}, 'direct_text', 'transcricao')
-    """
-    print(insert_str)
-    cursor.execute(insert_str)
-    new_transcript_id = cursor.lastrowid
-    sqlite_conn.commit()
-    sqlite_conn.close()
+    print(f"Received direct transcription for emergency {id_emergencia} with {len(transcript)} chars")
+
+    sqlite_conn = None
+    cursor = None
+    try:
+        sqlite_conn = sqlite.connect(os.environ["SQLITE_DB_PATH"])
+        cursor = sqlite_conn.cursor()
+        insert_str = f"""
+            INSERT INTO emergency_transcripts (id_emergencia, part, start_time, horario_de_transcricao, transcription_model, actor) 
+                VALUES ({id_emergencia},'{transcript}',{time()}, {time()}, 'direct_text', '{actor}')
+        """
+        print(insert_str)
+        cursor.execute(insert_str)
+        new_transcript_id = cursor.lastrowid
+        sqlite_conn.commit()
+    except Exception as e:
+        print("Error storing direct transcription:", e, file=sys.stderr)
+        raise e
+    finally:
+        if cursor is not None:
+            cursor.close()
+        if sqlite_conn is not None:
+            sqlite_conn.close()
 
     return str(new_transcript_id)
 
@@ -62,9 +76,12 @@ async def receive_audio(
     print("Saving", audio_data.filename, "audio to", audio_path)
     if not os.path.exists(os.path.dirname(audio_path)):
         os.mkdir(os.path.dirname(audio_path))
-    with open(audio_path, "wb") as tosave:
-        # audio_bytes = audio_data.file.read()
-        tosave.write(audio_data.file.read())
+    try:
+        with open(audio_path, "wb") as tosave:
+            # audio_bytes = audio_data.file.read()
+            tosave.write(audio_data.file.read())
+    finally:
+        await audio_data.close()
     print("Saved", audio_path)
 
     print("Loading", audio_path)
@@ -121,16 +138,23 @@ async def receive_audio(
         raise err"""
 
     print("Saving in audios list")
-    sqlite_conn = sqlite.connect(os.environ["SQLITE_DB_PATH"])
-    cursor = sqlite_conn.cursor()
-    insert_str = f"""
-        INSERT INTO emergency_audios (id, id_emergencia, start_time, transcription_status, sampling_rate, audio_length_seconds, audio_path) 
-            VALUES ('{audio_id}', {id_emergencia}, {time()}, {0}, {sp_rate}, {audio_duration}, '{audio_path}')
-    """
-    print(insert_str)
-    cursor.execute(insert_str)
-    new_audio_id = cursor.lastrowid
-    sqlite_conn.commit()
-    sqlite_conn.close()
+    sqlite_conn = None
+    cursor = None
+    try:
+        sqlite_conn = sqlite.connect(os.environ["SQLITE_DB_PATH"])
+        cursor = sqlite_conn.cursor()
+        insert_str = f"""
+            INSERT INTO emergency_audios (id, id_emergencia, start_time, transcription_status, sampling_rate, audio_length_seconds, audio_path) 
+                VALUES ('{audio_id}', {id_emergencia}, {time()}, {0}, {sp_rate}, {audio_duration}, '{audio_path}')
+        """
+        print(insert_str)
+        cursor.execute(insert_str)
+        new_audio_id = cursor.lastrowid
+        sqlite_conn.commit()
+    finally:
+        if cursor is not None:
+            cursor.close()
+        if sqlite_conn is not None:
+            sqlite_conn.close()
 
     return str(new_audio_id)

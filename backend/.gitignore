@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 .fuse_hidden*
+*TODO_safety.md
 sqlite.db
 *.parquet
 results/sentence_encoding_cache.duckdb
@@ -30,6 +31,14 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+inference_servers/*.log
+datasets/df_emergencies_eval*
+.docker_controller.lock
+.docker_controller_output_dir
+naturezas.csv.bm25_indexing
+substr*.out
+substr*.err
+containers.err
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -118,7 +127,7 @@ ipython_config.py
 #   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
 #   in version control.
 #   https://pdm.fming.dev/latest/usage/project/#working-with-version-control
-run_tests*.json
+run_load_tests*.json
 .pdm.toml
 .pdm-python
 .pdm-build/

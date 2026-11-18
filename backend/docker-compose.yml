@@ -1,21 +1,54 @@
 services:
-  staging:
-    image: alpine:3.14
+  hermes-base:
+    image: hermes_base
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.base_cpu
+    command: ["true"]
+  init_staging:
+    depends_on:
+      hermes-base:
+        condition: service_completed_successfully
+    build:
+      dockerfile: docker/Dockerfile.staging
+      additional_contexts:
+        hermes_base: service:hermes-base
     volumes:
       - ${LOCAL_SQL_DB_PATH}:/app/sqlite_data
       - ./src/init.sql:/init.sql
+      - ./src/staging:/src/staging
+      - ./.env:/.env
     networks:
       - hermes-network
-    command: >
-      sh -c "
-        apk add --no-cache sqlite &&
-        sqlite3 $LOCAL_SQL_DB_PATH < /init.sql &&
-        echo 'SQLite inicializado. '
-      "
+    env_file: docker/common.env
+    command: ["python3", "-u", "/src/staging/init_db.py"]
+  staging:
+    depends_on:
+      hermes-base:
+        condition: service_completed_successfully
+      init_staging:
+        condition: service_completed_successfully
+    build:
+      dockerfile: docker/Dockerfile.staging
+      additional_contexts:
+        hermes_base: service:hermes-base
+    volumes:
+      - ${ASTERISK_RECORDINGS_PATH}:/asterisk_recordings
+      - ${LOCAL_SQL_DB_PATH}:/app/sqlite_data
+      - ./src/init.sql:/init.sql
+      - ./src/staging:/src/staging
+      - ./.env:/.env
+    networks:
+      - hermes-network
     env_file: docker/common.env
   test_asr:
+    depends_on:
+      hermes-base:
+        condition: service_completed_successfully
     build:
       dockerfile: docker/Dockerfile.asr_cpu
+      additional_contexts:
+        hermes_base: service:hermes-base
     networks:
       - hermes-network
     volumes:
@@ -33,12 +66,16 @@ services:
       "
   hermes-api:
     depends_on:
+      hermes-base:
+        condition: service_completed_successfully
       test_asr:
         condition: service_completed_successfully
-      staging:
+      init_staging:
         condition: service_completed_successfully
     build:
       dockerfile: docker/Dockerfile.hermes
+      additional_contexts:
+        hermes_base: service:hermes-base
     ports:
       - "${HERMES_PORT}:${HERMES_PORT}"
     networks:
@@ -48,17 +85,23 @@ services:
       - ${LOCAL_SQL_DB_PATH}:/app/sqlite_data
       - ./logs/:/logs
       - hf_cache_vol:/tmp/hf_cache_dir
-      - ./src/hermes:/src
+      - ./src/hermes:/src/hermes
       - ./.env:/.env
+    environment:
+      - FASTAPI_MODE=${FASTAPI_MODE:-run}
     env_file: docker/common.env
   hermes-ner:
     depends_on:
+      hermes-base:
+        condition: service_completed_successfully
       test_asr:
         condition: service_completed_successfully
-      staging:
+      init_staging:
         condition: service_completed_successfully
     build:
       dockerfile: docker/Dockerfile.ner_cpu
+      additional_contexts:
+        hermes_base: service:hermes-base
     networks:
       - hermes-network
 
@@ -68,6 +111,7 @@ services:
       - ${LOCAL_SQL_DB_PATH}:/app/sqlite_data
       - ./logs/:/logs
       - hf_cache_vol:/tmp/hf_cache_dir
+      - ./datasets:/datasets
       - ./src/ner:/src
       - /tmp:/tmp
       - ./config.json:/config.json
@@ -76,12 +120,16 @@ services:
 
   hermes-asr:
     depends_on:
-      staging:
+      hermes-base:
+        condition: service_completed_successfully
+      init_staging:
         condition: service_completed_successfully
       test_asr:
         condition: service_completed_successfully
     build:
       dockerfile: docker/Dockerfile.asr_cpu
+      additional_contexts:
+        hermes_base: service:hermes-base
     networks:
       - hermes-network
 
@@ -96,12 +144,16 @@ services:
     env_file: docker/common.env
   hermes-interpretation:
     depends_on:
+      hermes-base:
+        condition: service_completed_successfully
       test_asr:
         condition: service_completed_successfully
-      staging:
+      init_staging:
         condition: service_completed_successfully
     build:
       dockerfile: docker/Dockerfile.interpretation
+      additional_contexts:
+        hermes_base: service:hermes-base
     #ports:
     #  - "XXXX:XXXX"
     networks:
